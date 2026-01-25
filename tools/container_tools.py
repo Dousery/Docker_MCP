@@ -144,6 +144,266 @@ class ContainerTools:
         except (KeyError, ZeroDivisionError):
             return 0.0
     
+    def run_container(
+        self,
+        image: str,
+        name: Optional[str] = None,
+        command: Optional[str] = None,
+        ports: Optional[Dict[str, int]] = None,
+        volumes: Optional[Dict[str, str]] = None,
+        environment: Optional[Dict[str, str]] = None,
+        network: Optional[str] = None,
+        detach: bool = True,
+        remove: bool = False,
+        restart_policy: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Create and run a new container.
+        
+        Args:
+            image: Image name (e.g., "nginx", "nginx:latest", "python:3.9")
+            name: Optional container name
+            command: Optional command to run
+            ports: Port mapping {container_port: host_port} (e.g., {"80/tcp": 8080})
+            volumes: Volume mapping {volume_name: container_path} (e.g., {"my-vol": "/data"})
+            environment: Environment variables {key: value}
+            network: Network to connect to
+            detach: Run in background (default: True)
+            remove: Auto-remove when stopped (default: False)
+            restart_policy: Restart policy (no, always, on-failure, unless-stopped)
+        """
+        try:
+            # Prepare port bindings
+            port_bindings = None
+            if ports:
+                port_bindings = {k: v for k, v in ports.items()}
+            
+            # Prepare volume bindings
+            volume_bindings = None
+            if volumes:
+                volume_bindings = {k: {"bind": v, "mode": "rw"} for k, v in volumes.items()}
+            
+            # Prepare restart policy
+            restart_policy_dict = None
+            if restart_policy:
+                restart_policy_dict = {"Name": restart_policy}
+            
+            container = self.client.containers.run(
+                image=image,
+                name=name,
+                command=command,
+                ports=port_bindings,
+                volumes=volume_bindings,
+                environment=environment,
+                network=network,
+                detach=detach,
+                remove=remove,
+                restart_policy=restart_policy_dict
+            )
+            
+            return {
+                "id": container.id,
+                "name": container.name,
+                "status": container.status,
+                "image": image,
+                "message": f"Successfully started container '{container.name}'",
+            }
+        except docker.errors.ImageNotFound:
+            raise ValueError(f"Image '{image}' not found. Try pulling it first.")
+        except docker.errors.APIError as e:
+            if "name is already in use" in str(e).lower():
+                raise ValueError(f"Container name '{name}' is already in use")
+            raise RuntimeError(f"Failed to run container: {str(e)}")
+        except docker.errors.DockerException as e:
+            raise RuntimeError(f"Failed to run container: {str(e)}")
+    
+    def start_container(self, container_identifier: str) -> Dict[str, Any]:
+        """
+        Start a stopped container.
+        
+        Args:
+            container_identifier: Container ID, full name, or partial name
+        """
+        try:
+            container = self._find_container(container_identifier)
+            
+            if container.status == "running":
+                return {
+                    "id": container.id,
+                    "name": container.name,
+                    "status": "running",
+                    "message": f"Container '{container.name}' is already running",
+                }
+            
+            container.start()
+            container.reload()
+            
+            return {
+                "id": container.id,
+                "name": container.name,
+                "status": container.status,
+                "message": f"Successfully started container '{container.name}'",
+            }
+        except ValueError:
+            raise
+        except docker.errors.DockerException as e:
+            raise RuntimeError(f"Failed to start container: {str(e)}")
+    
+    def stop_container(self, container_identifier: str, timeout: int = 10) -> Dict[str, Any]:
+        """
+        Stop a running container.
+        
+        Args:
+            container_identifier: Container ID, full name, or partial name
+            timeout: Seconds to wait before killing (default: 10)
+        """
+        try:
+            container = self._find_container(container_identifier)
+            
+            if container.status != "running":
+                return {
+                    "id": container.id,
+                    "name": container.name,
+                    "status": container.status,
+                    "message": f"Container '{container.name}' is not running",
+                }
+            
+            container.stop(timeout=timeout)
+            container.reload()
+            
+            return {
+                "id": container.id,
+                "name": container.name,
+                "status": container.status,
+                "message": f"Successfully stopped container '{container.name}'",
+            }
+        except ValueError:
+            raise
+        except docker.errors.DockerException as e:
+            raise RuntimeError(f"Failed to stop container: {str(e)}")
+    
+    def restart_container(self, container_identifier: str, timeout: int = 10) -> Dict[str, Any]:
+        """
+        Restart a container.
+        
+        Args:
+            container_identifier: Container ID, full name, or partial name
+            timeout: Seconds to wait before killing (default: 10)
+        """
+        try:
+            container = self._find_container(container_identifier)
+            container.restart(timeout=timeout)
+            container.reload()
+            
+            return {
+                "id": container.id,
+                "name": container.name,
+                "status": container.status,
+                "message": f"Successfully restarted container '{container.name}'",
+            }
+        except ValueError:
+            raise
+        except docker.errors.DockerException as e:
+            raise RuntimeError(f"Failed to restart container: {str(e)}")
+    
+    def remove_container(
+        self,
+        container_identifier: str,
+        force: bool = False,
+        remove_volumes: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Remove a container.
+        
+        Args:
+            container_identifier: Container ID, full name, or partial name
+            force: Force remove even if running (default: False)
+            remove_volumes: Remove associated volumes (default: False)
+        """
+        try:
+            container = self._find_container(container_identifier)
+            container_name = container.name
+            container_id = container.id
+            
+            container.remove(force=force, v=remove_volumes)
+            
+            return {
+                "id": container_id,
+                "name": container_name,
+                "status": "removed",
+                "message": f"Successfully removed container '{container_name}'",
+            }
+        except ValueError:
+            raise
+        except docker.errors.APIError as e:
+            if "is running" in str(e).lower():
+                raise RuntimeError(
+                    f"Container '{container_identifier}' is running. Use force=True to remove it."
+                )
+            raise RuntimeError(f"Failed to remove container: {str(e)}")
+        except docker.errors.DockerException as e:
+            raise RuntimeError(f"Failed to remove container: {str(e)}")
+    
+    def exec_in_container(
+        self,
+        container_identifier: str,
+        command: str,
+        workdir: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Execute a command inside a running container.
+        
+        Args:
+            container_identifier: Container ID, full name, or partial name
+            command: Command to execute (e.g., "ls -la", "cat /etc/hosts")
+            workdir: Working directory inside container
+        """
+        try:
+            container = self._find_container(container_identifier)
+            
+            if container.status != "running":
+                raise RuntimeError(
+                    f"Container '{container_identifier}' is not running. Start it first."
+                )
+            
+            exit_code, output = container.exec_run(
+                cmd=command,
+                workdir=workdir
+            )
+            
+            return {
+                "container": container.name,
+                "command": command,
+                "exit_code": exit_code,
+                "output": output.decode("utf-8") if output else "",
+            }
+        except ValueError:
+            raise
+        except docker.errors.DockerException as e:
+            raise RuntimeError(f"Failed to execute command: {str(e)}")
+    
+    def prune_containers(self) -> Dict[str, Any]:
+        """
+        Remove all stopped containers.
+        
+        Returns information about removed containers and space reclaimed.
+        """
+        try:
+            result = self.client.containers.prune()
+            
+            containers_deleted = result.get("ContainersDeleted", []) or []
+            space_reclaimed = result.get("SpaceReclaimed", 0)
+            
+            return {
+                "containers_deleted": containers_deleted,
+                "space_reclaimed_bytes": space_reclaimed,
+                "space_reclaimed_mb": round(space_reclaimed / (1024 * 1024), 2),
+                "status": "pruned",
+                "message": f"Removed {len(containers_deleted)} stopped containers",
+            }
+        except docker.errors.DockerException as e:
+            raise RuntimeError(f"Failed to prune containers: {str(e)}")
+    
     def close(self):
         """Close Docker client connection."""
         if hasattr(self, "client"):
