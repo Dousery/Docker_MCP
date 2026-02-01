@@ -118,7 +118,7 @@ class ImageTools:
                 },
             }
         except ValueError:
-            raise  # Re-raise ValueError as-is (already has good error message)
+            raise 
         except docker.errors.DockerException as e:
             raise RuntimeError(f"Failed to get image info: {str(e)}")
     
@@ -237,7 +237,7 @@ class ImageTools:
                 for entry in history
             ]
         except ValueError:
-            raise  # Re-raise ValueError as-is
+            raise
         except docker.errors.DockerException as e:
             raise RuntimeError(f"Failed to get image history: {str(e)}")
     
